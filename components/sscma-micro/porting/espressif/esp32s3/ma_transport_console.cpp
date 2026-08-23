@@ -33,9 +33,11 @@ ma_err_t Console::init(const void* config) {
         return MA_EIO;
     }
 
-    if (!usb_serial_jtag_is_connected()) {
-        return MA_EPERM;
-    }
+    // Do NOT gate init on usb_serial_jtag_is_connected(): at cold boot the app
+    // reaches this point before the host finishes USB enumeration, the check
+    // fails, and the console transport stays dead forever (the AT server skips
+    // uninitialized transports). The driver works fine when installed before
+    // the host attaches; TX to an absent host is dropped by the driver layer.
 
     if (_rb_rx == nullptr) {
         _rb_rx = new SPSCRingBuffer<char>(4096);
