@@ -94,6 +94,15 @@ ma_err_t CameraESP32::init(size_t preset_idx) noexcept {
     case OV3660_PID:
         _sensor->set_brightness(_sensor, 1);   // up the brightness just a bit
         _sensor->set_saturation(_sensor, -2);  // lower the saturation
+        // Bias auto-exposure brighter and raise the AGC gain ceiling: the
+        // driver's own defaults (ae_level=0, a conservative gainceiling)
+        // leave indoor/artificial-light scenes underexposed, which starves
+        // a downstream int8 detector of usable contrast before the model
+        // ever sees the frame. Stay in AUTO exposure/gain (do not call
+        // set_exposure_ctrl/set_gain_ctrl) so this adapts across lighting
+        // conditions instead of baking in one fixed scene's AEC value.
+        _sensor->set_ae_level(_sensor, 2);
+        _sensor->set_gainceiling(_sensor, GAINCEILING_64X);
         break;
 
     default:

@@ -16,7 +16,16 @@
 #define MA_BOARD_NAME                        PORT_DEVICE_NAME
 
 #define MA_USE_ENGINE_TFLITE                 1
-#define MA_ENGINE_TFLITE_TENSOE_ARENA_SIZE   (2048 * 1024)
+// 2048 KiB was sized for the original YOLOv5-style Swift-YOLO zoo model
+// (192x192, no attention block). A YOLO11n/YOLOv8n DFL detector at the same
+// 192x192 needs ~3.1 MiB of interpreter working memory on this CPU-only
+// interpreter (measured on-device: "Failed to resize buffer. Requested:
+// 3096128, available 1993744" at the old 2048 KiB size) — there is no NPU
+// here to tile/fuse activations the way Vela does on the WE2, so peak
+// co-resident tensors are simply larger. 3584 KiB leaves ~560 KiB headroom
+// over that measured requirement; PSRAM is 8 MiB total with plenty of slack
+// beyond the camera framebuffers and other allocations.
+#define MA_ENGINE_TFLITE_TENSOE_ARENA_SIZE   (3584 * 1024)
 #define MA_USE_ENGINE_TENSOR_INDEX           1
 #define MA_USE_STATIC_TENSOR_ARENA           1
 
@@ -48,6 +57,8 @@
 #define MA_TFLITE_OP_MUL                     1
 #define MA_TFLITE_OP_SPLIT_V                 1
 #define MA_TFLITE_OP_STRIDED_SLICE           1
+#define MA_TFLITE_OP_SLICE                   1
+#define MA_TFLITE_OP_BATCH_MATMUL            1
 #define MA_TFLITE_OP_MEAN                    1
 #define MA_TFLITE_OP_SOFTMAX                 1
 #define MA_TFLITE_OP_DEPTHWISE_CONV_2D       1
