@@ -1,0 +1,185 @@
+diff --git a/sscma/core/cv/ma_cv.cpp b/sscma/core/cv/ma_cv.cpp
+index c80186c..9179b8f 100644
+--- a/sscma/core/cv/ma_cv.cpp
++++ b/sscma/core/cv/ma_cv.cpp
+@@ -41,6 +41,7 @@ MA_ATTR_WEAK void yuv422p_to_rgb(const ma_img_t* src, ma_img_t* dst) {
+     uint32_t u_chunk = src->width * src->height;
+     uint32_t v_chunk = src->width * src->height + src->width * src->height / 2;
+     float beta_h = (float)src->height / dst->height, beta_w = (float)src->width / dst->width;
++    uint32_t planar_size = dst->width * dst->height;
+ 
+     MA_ASSERT(src->format == MA_PIXEL_FORMAT_YUV422);
+ 
+@@ -84,6 +85,16 @@ MA_ATTR_WEAK void yuv422p_to_rgb(const ma_img_t* src, ma_img_t* dst) {
+                 dst->data[index * 3 + 0] = (uint8_t)MA_CLIP(r, 0, 255);
+                 dst->data[index * 3 + 1] = (uint8_t)MA_CLIP(g, 0, 255);
+                 dst->data[index * 3 + 2] = (uint8_t)MA_CLIP(b, 0, 255);
++            } else if (dst->format == MA_PIXEL_FORMAT_RGB888_PLANAR) {
++                // Channel-planar layout (R plane, then G plane, then B plane),
++                // matching rgb888_to_rgb888_planar()'s convention exactly —
++                // required by any model exported with an NCHW input (e.g. the
++                // LiteRT/torch.export path used for YOLO11/YOLOv8), which this
++                // conversion path never previously needed to support (every
++                // model here so far used NHWC/RGB888 packed input).
++                dst->data[index] = (uint8_t)MA_CLIP(r, 0, 255);
++                dst->data[index + planar_size] = (uint8_t)MA_CLIP(g, 0, 255);
++                dst->data[index + planar_size * 2] = (uint8_t)MA_CLIP(b, 0, 255);
+             }
+         }
+     }
+@@ -562,6 +573,125 @@ MA_ATTR_WEAK void rgb565_to_rgb888(const ma_img_t* src, ma_img_t* dst) {
+     }
+ }
+ 
++// Channel-planar counterpart of rgb565_to_rgb888() — same decode, but writes
++// R/G/B into three separate planes (matching rgb888_to_rgb888_planar()'s
++// layout) instead of interleaved bytes. Needed for any model with an NCHW
++// input (e.g. the LiteRT/torch.export path used for YOLO11/YOLOv8) — every
++// model this conversion path previously supported used NHWC/RGB888 packed
++// input, so this combination (RGB565 camera source -> planar model input)
++// was never exercised before.
++MA_ATTR_WEAK void rgb565_to_rgb888_planar(const ma_img_t* src, ma_img_t* dst) {
++    uint16_t sw = src->width;
++    uint16_t sh = src->height;
++    uint16_t dw = dst->width;
++    uint16_t dh = dst->height;
++
++    uint32_t beta_w = (sw << 16) / dw;
++    uint32_t beta_h = (sh << 16) / dh;
++
++    uint32_t i_mul_bh_sw = 0;
++    uint32_t i_mul_dw    = 0;
++
++    uint32_t init_index  = 0;
++    uint32_t index       = 0;
++    uint32_t planar_size = dw * dh;
++
++    const uint8_t* src_p = src->data;
++    uint8_t* dst_p       = dst->data;
++
++    b16_t b16{};
++
++    uint8_t r = 0;
++    uint8_t g = 0;
++    uint8_t b = 0;
++
++    switch (dst->rotate) {
++        case MA_PIXEL_ROTATE_90:
++            for (uint16_t i = 0; i < dh; ++i) {
++                i_mul_bh_sw = ((i * beta_h) >> 16) * sw;
++
++                for (uint16_t j = 0; j < dw; ++j) {
++                    init_index = ((j * beta_w) >> 16) + i_mul_bh_sw;
++                    index      = (j % dw) * dh + ((dh - 1) - ((j / dw) + i));
++
++                    b16 = *reinterpret_cast<const b16_t*>(src_p + (init_index << 1));
++                    r   = RGB565_TO_RGB888_LOOKUP_TABLE_5[(b16.b0_8 & 0xF8) >> 3];
++                    b   = RGB565_TO_RGB888_LOOKUP_TABLE_5[b16.b8_16 & 0x1F];
++                    g   = RGB565_TO_RGB888_LOOKUP_TABLE_6[((b16.b0_8 & 0x07) << 3) |
++                                                        ((b16.b8_16 & 0xE0) >> 5)];
++
++                    dst_p[index]                   = r;
++                    dst_p[index + planar_size]     = g;
++                    dst_p[index + planar_size * 2] = b;
++                }
++            }
++            break;
++
++        case MA_PIXEL_ROTATE_180:
++            for (uint16_t i = 0; i < dh; ++i) {
++                i_mul_bh_sw = ((i * beta_h) >> 16) * sw;
++
++                for (uint16_t j = 0; j < dw; ++j) {
++                    init_index = ((j * beta_w) >> 16) + i_mul_bh_sw;
++                    index      = ((dw - 1) - (j % dw)) + ((dh - 1) - ((j / dw) + i)) * dw;
++
++                    b16 = *reinterpret_cast<const b16_t*>(src_p + (init_index << 1));
++                    r   = RGB565_TO_RGB888_LOOKUP_TABLE_5[(b16.b0_8 & 0xF8) >> 3];
++                    b   = RGB565_TO_RGB888_LOOKUP_TABLE_5[b16.b8_16 & 0x1F];
++                    g   = RGB565_TO_RGB888_LOOKUP_TABLE_6[((b16.b0_8 & 0x07) << 3) |
++                                                        ((b16.b8_16 & 0xE0) >> 5)];
++
++                    dst_p[index]                   = r;
++                    dst_p[index + planar_size]     = g;
++                    dst_p[index + planar_size * 2] = b;
++                }
++            }
++            break;
++
++        case MA_PIXEL_ROTATE_270:
++            for (uint16_t i = 0; i < dh; ++i) {
++                i_mul_bh_sw = ((i * beta_h) >> 16) * sw;
++
++                for (uint16_t j = 0; j < dw; ++j) {
++                    init_index = ((j * beta_w) >> 16) + i_mul_bh_sw;
++                    index      = ((dw - 1) - (j % dw)) * dh + (j / dw) + i;
++
++                    b16 = *reinterpret_cast<const b16_t*>(src_p + (init_index << 1));
++                    r   = RGB565_TO_RGB888_LOOKUP_TABLE_5[(b16.b0_8 & 0xF8) >> 3];
++                    b   = RGB565_TO_RGB888_LOOKUP_TABLE_5[b16.b8_16 & 0x1F];
++                    g   = RGB565_TO_RGB888_LOOKUP_TABLE_6[((b16.b0_8 & 0x07) << 3) |
++                                                        ((b16.b8_16 & 0xE0) >> 5)];
++
++                    dst_p[index]                   = r;
++                    dst_p[index + planar_size]     = g;
++                    dst_p[index + planar_size * 2] = b;
++                }
++            }
++            break;
++
++        default:
++            for (uint16_t i = 0; i < dh; ++i) {
++                i_mul_bh_sw = ((i * beta_h) >> 16) * sw;
++                i_mul_dw    = i * dw;
++
++                for (uint16_t j = 0; j < dw; ++j) {
++                    init_index = ((j * beta_w) >> 16) + i_mul_bh_sw;
++                    index      = j + i_mul_dw;
++
++                    b16 = *reinterpret_cast<const b16_t*>(src_p + (init_index << 1));
++                    r   = RGB565_TO_RGB888_LOOKUP_TABLE_5[(b16.b0_8 & 0xF8) >> 3];
++                    b   = RGB565_TO_RGB888_LOOKUP_TABLE_5[b16.b8_16 & 0x1F];
++                    g   = RGB565_TO_RGB888_LOOKUP_TABLE_6[((b16.b0_8 & 0x07) << 3) |
++                                                        ((b16.b8_16 & 0xE0) >> 5)];
++
++                    dst_p[index]                   = r;
++                    dst_p[index + planar_size]     = g;
++                    dst_p[index + planar_size * 2] = b;
++                }
++            }
++    }
++}
++
+ MA_ATTR_WEAK void rgb565_to_rgb565(const ma_img_t* src, ma_img_t* dst) {
+     uint16_t sw = src->width;
+     uint16_t sh = src->height;
+@@ -988,6 +1118,8 @@ MA_ATTR_WEAK ma_err_t rgb_to_rgb(const ma_img_t* src, ma_img_t* dst) {
+     else if (src->format == MA_PIXEL_FORMAT_RGB565) {
+         if (dst->format == MA_PIXEL_FORMAT_RGB888)
+             rgb565_to_rgb888(src, dst);
++        else if (dst->format == MA_PIXEL_FORMAT_RGB888_PLANAR)
++            rgb565_to_rgb888_planar(src, dst);
+         else if (dst->format == MA_PIXEL_FORMAT_RGB565)
+             rgb565_to_rgb565(src, dst);
+         else if (dst->format == MA_PIXEL_FORMAT_GRAYSCALE)
+@@ -1093,7 +1225,7 @@ MA_ATTR_WEAK ma_err_t convert(const ma_img_t* src, ma_img_t* dst) {
+ 
+     if (src->format == MA_PIXEL_FORMAT_YUV422) {
+         if (dst->format == MA_PIXEL_FORMAT_RGB565 || dst->format == MA_PIXEL_FORMAT_RGB888 ||
+-            dst->format == MA_PIXEL_FORMAT_GRAYSCALE) {
++            dst->format == MA_PIXEL_FORMAT_RGB888_PLANAR || dst->format == MA_PIXEL_FORMAT_GRAYSCALE) {
+             yuv422p_to_rgb(src, dst);
+             return MA_OK;
+         }
+diff --git a/sscma/server/at/callback/refactor_required.hpp b/sscma/server/at/callback/refactor_required.hpp
+index 17c857f..eecdac7 100644
+--- a/sscma/server/at/callback/refactor_required.hpp
++++ b/sscma/server/at/callback/refactor_required.hpp
+@@ -54,6 +54,7 @@ ma_err_t setAlgorithmInput(Model* algorithm, ma_img_t& img) {
+         case MA_MODEL_TYPE_FOMO:
+         case MA_MODEL_TYPE_YOLOV5:
+         case MA_MODEL_TYPE_YOLOV8:
++        case MA_MODEL_TYPE_YOLO11:
+         case MA_MODEL_TYPE_NVIDIA_DET:
+         case MA_MODEL_TYPE_YOLO_WORLD:
+         case MA_MODEL_TYPE_RTMDET:

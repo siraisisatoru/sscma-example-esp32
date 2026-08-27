@@ -1,0 +1,33 @@
+diff --git a/sscma/core/model/ma_model_yolo11.cpp b/sscma/core/model/ma_model_yolo11.cpp
+index cadfe2b..b2e7bfa 100644
+--- a/sscma/core/model/ma_model_yolo11.cpp
++++ b/sscma/core/model/ma_model_yolo11.cpp
+@@ -126,14 +126,26 @@ ma_err_t Yolo11::postProcessI8() {
+                 if (target < 0)
+                     continue;
+ 
+-                float score = ma::math::dequantizeValue(max, outputs_[i * 2].quant_param.scale, outputs_[i * 2].quant_param.zero_point);
++                // NOTE: outputs_[i*2] is the BOX tensor, outputs_[i*2+1] is the
++                // CLS tensor (see the output_score/output_box assignments
++                // above) — each must be dequantized with its OWN quant_param,
++                // not the other tensor's. The upstream code had these swapped
++                // (verified against Seeed-Studio/SSCMA-Micro @ e830d54): since
++                // box and cls tensors have genuinely different int8 scales
++                // (e.g. measured on our export: box ~0.109, cls ~0.056), using
++                // the wrong tensor's scale corrupts both the confidence score
++                // and every box coordinate on every inference, independent of
++                // image content — this was producing high-confidence,
++                // geometrically-nonsensical boxes regardless of what the
++                // camera saw.
++                float score = ma::math::dequantizeValue(max, outputs_[i * 2 + 1].quant_param.scale, outputs_[i * 2 + 1].quant_param.zero_point);
+ 
+                 if (score > score_threshold_non_sigmoid) {
+                     float rect[4];
+                     float before_dfl[dfl_len * 4];
+                     offset = j * grid_w + k;
+                     for (int b = 0; b < dfl_len * 4; b++) {
+-                        before_dfl[b] = ma::math::dequantizeValue(output_box[offset], outputs_[i * 2 + 1].quant_param.scale, outputs_[i * 2 + 1].quant_param.zero_point);
++                        before_dfl[b] = ma::math::dequantizeValue(output_box[offset], outputs_[i * 2].quant_param.scale, outputs_[i * 2].quant_param.zero_point);
+                         offset += grid_l;
+                     }
+                     compute_dfl(before_dfl, dfl_len, rect);

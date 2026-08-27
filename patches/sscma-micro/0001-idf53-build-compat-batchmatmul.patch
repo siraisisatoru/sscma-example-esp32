@@ -1,0 +1,73 @@
+diff --git a/sscma/core/engine/ma_engine_tflite.cpp b/sscma/core/engine/ma_engine_tflite.cpp
+index f2e588b..a849198 100644
+--- a/sscma/core/engine/ma_engine_tflite.cpp
++++ b/sscma/core/engine/ma_engine_tflite.cpp
+@@ -26,6 +26,9 @@ OpsResolver::OpsResolver() {
+ #if MA_TFLITE_OP_ALL || MA_TFLITE_OP_AVERAGE_POOL_2D
+     AddAveragePool2D();
+ #endif
++#if MA_TFLITE_OP_ALL || MA_TFLITE_OP_BATCH_MATMUL
++    AddBatchMatMul();
++#endif
+ #if MA_TFLITE_OP_ALL || MA_TFLITE_OP_BATCH_TO_SPACE_ND
+     AddBatchToSpaceNd();
+ #endif
+diff --git a/sscma/core/engine/ma_engine_tflite.h b/sscma/core/engine/ma_engine_tflite.h
+index e7669c7..f0f3cdb 100644
+--- a/sscma/core/engine/ma_engine_tflite.h
++++ b/sscma/core/engine/ma_engine_tflite.h
+@@ -47,6 +47,9 @@ enum OpsCount : unsigned int {
+ #if MA_TFLITE_OP_ALL || MA_TFLITE_OP_AVERAGE_POOL_2D
+     AddAveragePool2D,
+ #endif
++#if MA_TFLITE_OP_ALL || MA_TFLITE_OP_BATCH_MATMUL
++    AddBatchMatMul,
++#endif
+ #if MA_TFLITE_OP_ALL || MA_TFLITE_OP_BATCH_TO_SPACE_ND
+     AddBatchToSpaceNd,
+ #endif
+diff --git a/sscma/porting/ma_osal.h b/sscma/porting/ma_osal.h
+index a11878e..c9042b0 100644
+--- a/sscma/porting/ma_osal.h
++++ b/sscma/porting/ma_osal.h
+@@ -164,6 +164,7 @@ private:
+ private:
+     Mutex m_mutex;
+     ma_mbox_t m_mbox;
++    size_t m_size;
+ };
+ 
+ class Timer {
+diff --git a/sscma/porting/osal/ma_osal_freertos.cpp b/sscma/porting/osal/ma_osal_freertos.cpp
+index 3c7a3f4..55b7bd1 100644
+--- a/sscma/porting/osal/ma_osal_freertos.cpp
++++ b/sscma/porting/osal/ma_osal_freertos.cpp
+@@ -258,7 +258,7 @@ uint32_t Event::get() const {
+     }
+ }
+ 
+-MessageBox::MessageBox(size_t size) noexcept : m_mbox(nullptr) { m_mbox = xQueueCreate(size, sizeof(void*)); }
++MessageBox::MessageBox(size_t size) noexcept : m_mbox(nullptr), m_size(size) { m_mbox = xQueueCreate(size, sizeof(void*)); }
+ 
+ MessageBox::~MessageBox() noexcept { vQueueDelete(m_mbox); }
+ 
+@@ -308,12 +308,17 @@ size_t MessageBox::getCount() const {
+ }
+ 
+ size_t MessageBox::getSize() const {
+-    return static_cast<size_t>(uxQueueGetQueueLength(m_mbox));
++    // This IDF's FreeRTOS-Kernel (v5.3 pin) predates uxQueueGetQueueLength();
++    // the capacity never changes after construction, so the size passed to
++    // xQueueCreate() there is all this needs.
++    return m_size;
+ }
+ 
+ bool MessageBox::isFull() const {
+     if (xPortIsInsideInterrupt()) {
+-        return (uxQueueSpacesAvailableFromISR(m_mbox) == 0);
++        // No uxQueueSpacesAvailableFromISR() in this IDF's FreeRTOS-Kernel —
++        // equivalent via the ISR-safe count against the fixed capacity.
++        return (static_cast<size_t>(uxQueueMessagesWaitingFromISR(m_mbox)) >= m_size);
+     } else {
+         Guard guard(m_mutex);
+         return (uxQueueSpacesAvailable(m_mbox) == 0);
