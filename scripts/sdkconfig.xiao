@@ -1,0 +1,69 @@
+# sdkconfig overlay for the XIAO ESP32S3 Sense -- applied AFTER the example's
+# own sdkconfig.defaults (see build_fw.sh: SDKCONFIG_DEFAULTS lists this file
+# second, and later files win). Every entry here fixes a failure that was
+# actually reproduced on this board during bring-up; do not "clean up"
+# entries without re-testing the failure they prevent.
+
+# ---------------------------------------------------------------------------
+# Flash size: the board has 8 MB QUAD flash (esptool-verified). The example's
+# sdkconfig.defaults claims 32 MB, which generates a bootloader header lying
+# about the flash size. Upstream gets away with it only because it also sets
+# CONFIG_ESPTOOLPY_HEADER_FLASHSIZE_UPDATE=y, which rewrites the header to the
+# detected size during `idf.py flash` -- but we flash with raw esptool at
+# fixed offsets (flash_fw.sh), where nothing rewrites the header and a 32 MB
+# header on an 8 MB part is a boot-loop/corruption vector (confirmed risk by
+# upstream research). Pin the truth at build time instead.
+CONFIG_ESPTOOLPY_FLASHSIZE_32MB=n
+CONFIG_ESPTOOLPY_FLASHSIZE_8MB=y
+# With the size pinned correctly there is nothing for the flasher to "fix up";
+# disable the rewrite so the flashed image is byte-identical to the built one.
+CONFIG_ESPTOOLPY_HEADER_FLASHSIZE_UPDATE=n
+
+# ---------------------------------------------------------------------------
+# Console: the example defaults route the console to UART0, but the XIAO's
+# only host connection is the chip's native USB-Serial-JTAG (VID 0x303A
+# PID 0x1001). With UART0 console every panic/backtrace is invisible over
+# USB -- during bring-up this made a fatal crash look like a dead board.
+# Route the primary console to USB-Serial-JTAG so boot logs, panics and the
+# ESP-IDF console all arrive on the same port as the AT protocol.
+CONFIG_ESP_CONSOLE_UART_DEFAULT=n
+CONFIG_ESP_CONSOLE_USB_SERIAL_JTAG=y
+
+# ---------------------------------------------------------------------------
+# Main task stack: the default 3584 bytes overflows in the littlefs first-boot
+# format path ("***ERROR*** A stack overflow in task main has been detected")
+# -> eternal reboot loop, which on macOS additionally flaps USB enumeration
+# until the USB-Serial-JTAG session wedges and needs a physical replug.
+# 16384 was verified to survive first-boot littlefs format of the db
+# partition with headroom.
+CONFIG_ESP_MAIN_TASK_STACK_SIZE=16384
+
+# ---------------------------------------------------------------------------
+# Log level: DEBUG was kept during early bring-up (stack overflow + console
+# enumeration race were only diagnosable with boot chatter visible) but the
+# platform has been stable since. DEBUG turned out to be actively harmful
+# once real inference streaming started: the console (UART0/USB console) is
+# shared, unsynchronized, single-byte-stream output between the ESP-IDF
+# logger and the AT server's JSON writer, and per-frame LOGD calls fire on
+# literally every inference -- right as another task's log line can
+# interleave mid-write. Measured on hardware: 363/371 lines (98%) of
+# AT+INVOKE event JSON arrived corrupted (a spliced-in log line eating the
+# quote+colon after a key) and were silently dropped by the host parser.
+# INFO drops the per-frame LOGD plus most driver D-level noise, removing the
+# dominant collision source.
+CONFIG_LOG_DEFAULT_LEVEL_INFO=y
+
+# ---------------------------------------------------------------------------
+# Inference throughput: TFLM is memory-bound here -- a multi-MB activation
+# arena in PSRAM plus several MB of weights streamed from memory-mapped flash
+# EVERY frame. Max out the data cache (32->64 KB, 32->64 B lines) and widen
+# the flash bus (DIO->QIO; chip is quad-capable per esptool flash_id, and
+# FLASH_MODE_AUTO_DETECT stays on so an incompatible chip falls back instead
+# of bricking).
+CONFIG_ESP32S3_DATA_CACHE_64KB=y
+CONFIG_ESP32S3_DATA_CACHE_LINE_64B=y
+CONFIG_ESPTOOLPY_FLASHMODE_QIO=y
+# ESP-NN fast requantize path: ~20% faster conv requant on the S3 assembly
+# kernels, at most +/-1 LSB vs the bit-exact TFLite reference -- irrelevant
+# for detection quality.
+CONFIG_NN_SKIP_NUDGE=y
