@@ -85,5 +85,8 @@ size_info.txt
 # lock files for examples and components
 dependencies.lock
 
+# flash_fw.sh venv
+scripts/.venv
+
 # managed_components for examples
 managed_components

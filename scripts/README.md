@@ -16,8 +16,10 @@ needed.
 
 - **Docker**, for the build only (macOS Docker Desktop cannot reach USB, so
   building happens in a container and flashing always happens on the host).
-- **Python 3 with `esptool` and `pyserial`** on the host, for flashing:
-  `pip install esptool pyserial`
+- **Python 3 with `venv`** on the host, for flashing. `flash_fw.sh` creates
+  `scripts/.venv` on first run and installs `scripts/requirements.txt`
+  (`esptool` + `pyserial`) into it automatically -- nothing to install by
+  hand.
 - `git submodule update --init --recursive` first, so the nested
   `components/sscma-micro/sscma-micro` submodule is checked out (its fixes
   are applied as patches at build time -- see `patches/sscma-micro/README.md`).

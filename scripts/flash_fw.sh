@@ -5,8 +5,9 @@
 # Usage:
 #   ./scripts/flash_fw.sh [--port /dev/cu.usbmodemXXX]
 #
-# Requires on the host: python3 with esptool + pyserial
-#   pip install esptool pyserial
+# Requires on the host: python3 with venv support. The first run creates
+# scripts/.venv and installs scripts/requirements.txt (esptool + pyserial)
+# into it; later runs reuse that venv as-is.
 #
 # Runs on the HOST (Docker on macOS cannot reach USB). The port is
 # auto-detected (VID 0x303A / PID 0x1001, the XIAO's native USB-Serial-JTAG)
@@ -30,6 +31,15 @@ set -euo pipefail
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 REPO_ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"
 BUILD_DIR="$REPO_ROOT/build/sscma_server_at"
+VENV_DIR="$SCRIPT_DIR/.venv"
+
+if [[ ! -x "$VENV_DIR/bin/python3" ]]; then
+  echo "[flash_fw] creating venv at $VENV_DIR"
+  python3 -m venv "$VENV_DIR"
+  "$VENV_DIR/bin/python3" -m pip install --quiet --upgrade pip
+  "$VENV_DIR/bin/python3" -m pip install --quiet -r "$SCRIPT_DIR/requirements.txt"
+fi
+PYTHON3="$VENV_DIR/bin/python3"
 
 PORT=""
 while [[ $# -gt 0 ]]; do
@@ -47,7 +57,7 @@ done
 }
 
 if [[ -z "$PORT" ]]; then
-  PORT=$(python3 -c "
+  PORT=$("$PYTHON3" -c "
 import serial.tools.list_ports as lp
 matches = [p.device for p in lp.comports() if p.vid == 0x303A and p.pid == 0x1001]
 print(matches[0] if matches else '')
@@ -71,7 +81,7 @@ echo "[flash_fw] build: $BUILD_DIR"
 # port will re-enumerate (possibly under a new usbmodem number), which is
 # normal -- reconnect tools should re-detect the port.
 cd "$BUILD_DIR"
-python3 -m esptool \
+"$PYTHON3" -m esptool \
   --chip esp32s3 \
   --port "$PORT" \
   --baud 921600 \
